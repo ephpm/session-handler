@@ -1,0 +1,23 @@
+# Composer
+/vendor/
+composer.phar
+composer.lock
+.composer-cache/
+
+# PHPUnit
+/.phpunit.cache/
+/.phpunit.result.cache
+/phpunit.xml
+/coverage/
+
+# IDE / editors
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Local notes
+/scratch/
+TODO.local

@@ -1,0 +1,36 @@
+{
+    "name": "ephpm/session-handler",
+    "description": "PHP session save handler that stores session payloads in ePHPm's in-process KV store via the ephpm_kv_* SAPI functions — drop-in replacement for the Files / Memcached / Redis session handlers, no daemon, no socket.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["ephpm", "session", "session-handler", "wordpress", "kv", "sapi"],
+    "homepage": "https://ephpm.dev",
+    "support": {
+        "issues": "https://github.com/ephpm/session-handler/issues",
+        "source": "https://github.com/ephpm/session-handler"
+    },
+    "require": {
+        "php": "^8.2",
+        "ext-session": "*"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.5 || ^11.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Ephpm\\SessionHandler\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Ephpm\\SessionHandler\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
+    "minimum-stability": "stable"
+}
