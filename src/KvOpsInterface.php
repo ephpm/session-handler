@@ -73,4 +73,15 @@ interface KvOpsInterface
      * -2 if the key does not exist, otherwise the ms remaining.
      */
     public function pttl(string $key): int;
+
+    /**
+     * Remove every key from the effective store. Backed by ephpm_kv_flush_all()
+     * (ePHPm v0.1.2+); a no-op returning false on older runtimes.
+     *
+     * Note: this is a *global* flush — it drops more than just session
+     * keys. KvSessionHandler deliberately does not expose this; the
+     * recommended way to invalidate every session is to bump the handler's
+     * prefix in config and let TTLs age the old entries out.
+     */
+    public function flush(): bool;
 }

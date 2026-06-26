@@ -96,6 +96,13 @@ final class InMemoryKvOps implements KvOpsInterface
         return \max(0, $this->deadlines[$key] - $this->nowMs());
     }
 
+    public function flush(): bool
+    {
+        $this->values = [];
+        $this->deadlines = [];
+        return true;
+    }
+
     /**
      * Resolve a key's value, expiring it lazily if its deadline has passed.
      */

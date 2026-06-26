@@ -108,4 +108,15 @@ final class InMemoryKvOpsTest extends TestCase
         // Original TTL unchanged.
         self::assertGreaterThan(0, $ops->pttl('k'));
     }
+
+    public function test_flush_clears_values_and_deadlines(): void
+    {
+        $ops = new InMemoryKvOps();
+        $ops->set('a', 'one');
+        $ops->set('b', 'two', 60);
+        self::assertTrue($ops->flush());
+        self::assertNull($ops->get('a'));
+        self::assertNull($ops->get('b'));
+        self::assertSame(-2, $ops->pttl('b'));
+    }
 }
