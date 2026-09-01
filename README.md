@@ -65,7 +65,9 @@ KV store instead of a `flock()` + `fwrite()` against
 
 - **PHP 8.2+** with `ext-session` (which is bundled with PHP — you
   almost certainly already have it).
-- **The ePHPm runtime** — the global `ephpm_kv_*` SAPI functions are
+- **The ePHPm runtime** — any tagged release works (the `ephpm_kv_*`
+  SAPI functions this handler calls have shipped since ePHPm v0.1.0;
+  current release: v0.8.6). The functions are
   registered by ePHPm's embedded PHP. Outside ePHPm,
   `SapiKvOps::__construct()` throws fast so you know immediately that
   you're not running where the handler can work. For development
@@ -81,8 +83,14 @@ var_dump(function_exists('ephpm_kv_get'));   // expect bool(true)
 
 ## Install
 
+ePHPm packages are distributed via their GitHub repositories, not
+Packagist. Add this repo as a Composer `vcs` repository, then require
+the package (`ephpm/session-handler` is tagged `v0.1.0`, so `^0.1`
+resolves):
+
 ```bash
-composer require ephpm/session-handler
+composer config repositories.ephpm/session-handler vcs https://github.com/ephpm/session-handler
+composer require ephpm/session-handler:^0.1
 ```
 
 That's it. No framework deps, nothing else to pull in.
@@ -108,12 +116,12 @@ my-app/
 ```json
 {
     "name": "acme/my-app",
+    "repositories": [
+        { "type": "vcs", "url": "https://github.com/ephpm/session-handler" }
+    ],
     "require": {
         "php": "^8.2",
         "ephpm/session-handler": "^0.1"
-    },
-    "autoload": {
-        "files": ["vendor/autoload.php"]
     }
 }
 ```
@@ -193,7 +201,8 @@ If your WordPress install doesn't already have a Composer-managed
 ```bash
 cd /path/to/wordpress
 composer init --no-interaction --name=site/wp
-composer require ephpm/session-handler
+composer config repositories.ephpm/session-handler vcs https://github.com/ephpm/session-handler
+composer require ephpm/session-handler:^0.1
 ```
 
 Then point the autoload include in the mu-plugin at that vendor path.
