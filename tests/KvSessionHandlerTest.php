@@ -7,6 +7,8 @@ namespace Ephpm\SessionHandler\Tests;
 use Ephpm\SessionHandler\InMemoryKvOps;
 use Ephpm\SessionHandler\KvSessionHandler;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(KvSessionHandler::class)]
@@ -179,5 +181,145 @@ final class KvSessionHandlerTest extends TestCase
             $ids[] = $handler->create_sid();
         }
         self::assertSame(50, \count(\array_unique($ids)));
+    }
+
+    /**
+     * Regression pin for the create_sid() -> session_create_id() re-entrancy
+     * trap. When this handler is the ACTIVE save handler, PHP dispatches id
+     * creation to create_sid(); if that method itself called
+     * session_create_id() it could re-enter create_sid() (infinite recursion
+     * on PHP versions without the core guard). We generate the id directly, so
+     * driving a real session_start() through this handler must terminate and
+     * yield a valid id. Runs in a separate process because it mutates the
+     * global session save-handler and starts a session.
+     */
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function test_create_sid_does_not_recurse_when_handler_is_active(): void
+    {
+        // No cookies: this is CLI, and we only care about id generation, not
+        // transport. Avoids "headers already sent" under failOnWarning.
+        \ini_set('session.use_cookies', '0');
+        \ini_set('session.cache_limiter', '');
+
+        $handler = new KvSessionHandler('php_session:', 1440, new InMemoryKvOps());
+        \session_set_save_handler($handler, true);
+
+        // If create_sid() recursed, this would stack-overflow rather than
+        // return. Reaching the assertions at all is the core of the test.
+        self::assertTrue(@\session_start());
+
+        $id = \session_id();
+        self::assertNotEmpty($id);
+        self::assertMatchesRegularExpression('/^[A-Za-z0-9,-]+$/', $id);
+
+        // And a direct call is likewise safe and valid.
+        $direct = $handler->create_sid();
+        self::assertNotEmpty($direct);
+        self::assertMatchesRegularExpression('/^[A-Za-z0-9,-]+$/', $direct);
+
+        @\session_write_close();
+    }
+
+    // ── opt-in session locking ───────────────────────────────────────────────
+
+    private function lockingHandler(
+        InMemoryKvOps $ops,
+        int $maxWaitMs = 5_000,
+        int $spinUs = 20_000,
+        int $lockTtl = 30,
+    ): KvSessionHandler {
+        return new KvSessionHandler(
+            'php_session:',
+            1440,
+            $ops,
+            lockSessions: true,
+            lockTtlSeconds: $lockTtl,
+            lockSpinIntervalUs: $spinUs,
+            lockMaxWaitMs: $maxWaitMs,
+        );
+    }
+
+    public function test_locking_disabled_by_default_creates_no_lock_key(): void
+    {
+        // Default construction must not change the original lock-free behaviour.
+        $ops = new InMemoryKvOps();
+        $handler = $this->handler($ops);
+        $handler->read('sid');
+        self::assertFalse($ops->exists('php_session:lock:sid'));
+    }
+
+    public function test_locking_acquires_lock_on_read_with_ttl(): void
+    {
+        $ops = new InMemoryKvOps();
+        $handler = $this->lockingHandler($ops, lockTtl: 30);
+        $handler->read('sid');
+
+        self::assertTrue($ops->exists('php_session:lock:sid'));
+        $pttl = $ops->pttl('php_session:lock:sid');
+        self::assertGreaterThan(0, $pttl);
+        self::assertLessThanOrEqual(30_000, $pttl);
+
+        $handler->close();
+        self::assertFalse($ops->exists('php_session:lock:sid'));
+    }
+
+    public function test_held_lock_blocks_second_acquire_until_released(): void
+    {
+        $ops = new InMemoryKvOps();
+
+        // Handler A takes the lock.
+        $a = $this->lockingHandler($ops);
+        $a->read('sid');
+        $tokenA = $ops->get('php_session:lock:sid');
+        self::assertNotNull($tokenA);
+
+        // Handler B spins for a bounded window, then gives up — it must NOT
+        // steal A's lock (value stays A's token), and it must have actually
+        // waited roughly the max-wait window.
+        $b = $this->lockingHandler($ops, maxWaitMs: 100, spinUs: 10_000);
+        $start = \microtime(true);
+        $b->read('sid');
+        $elapsedMs = (\microtime(true) - $start) * 1000;
+
+        self::assertGreaterThanOrEqual(90.0, $elapsedMs);
+        self::assertSame($tokenA, $ops->get('php_session:lock:sid'));
+
+        // A releases; now B can take it and the token changes hands.
+        $a->close();
+        self::assertFalse($ops->exists('php_session:lock:sid'));
+
+        $b->read('sid');
+        $tokenB = $ops->get('php_session:lock:sid');
+        self::assertNotNull($tokenB);
+        self::assertNotSame($tokenA, $tokenB);
+    }
+
+    public function test_lock_becomes_available_after_ttl_expiry(): void
+    {
+        $ops = new InMemoryKvOps();
+
+        // A takes a lock with a 1s TTL but never releases it (simulating a
+        // crashed owner). The TTL is the safety valve that frees the session.
+        $a = $this->lockingHandler($ops, lockTtl: 1);
+        $a->read('sid');
+        $tokenA = $ops->get('php_session:lock:sid');
+        self::assertNotNull($tokenA);
+
+        // Wait out the lock TTL. InMemoryKvOps expires lazily on lookup, so
+        // after this the key is genuinely gone from setnx's perspective.
+        \usleep(1_100_000);
+        self::assertFalse($ops->exists('php_session:lock:sid'));
+
+        // B now acquires immediately (short max-wait proves it didn't block).
+        $b = $this->lockingHandler($ops, maxWaitMs: 50);
+        $start = \microtime(true);
+        $b->read('sid');
+        $elapsedMs = (\microtime(true) - $start) * 1000;
+
+        self::assertLessThan(50.0, $elapsedMs);
+        $tokenB = $ops->get('php_session:lock:sid');
+        self::assertNotNull($tokenB);
+        self::assertNotSame($tokenA, $tokenB);
     }
 }
