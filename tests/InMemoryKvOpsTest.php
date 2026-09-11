@@ -59,6 +59,46 @@ final class InMemoryKvOpsTest extends TestCase
         $ops->incrBy('label', 1);
     }
 
+    public function test_incr_returns_int_on_success(): void
+    {
+        // Guards the shared incrBy contract: success returns a real int, never
+        // a (int)false === 0 masking a type error (the SapiKvOps bug this
+        // audit fixed). InMemoryKvOps is the executable model of that contract.
+        $ops = new InMemoryKvOps();
+        $result = $ops->incrBy('n', 3);
+        self::assertIsInt($result);
+        self::assertSame(3, $result);
+    }
+
+    // ── setnx (the lock primitive) ───────────────────────────────────────────
+
+    public function test_setnx_inserts_only_when_absent(): void
+    {
+        $ops = new InMemoryKvOps();
+        self::assertTrue($ops->setnx('lock', 'token-a'));
+        // A live entry blocks a second insert — the whole point of setnx.
+        self::assertFalse($ops->setnx('lock', 'token-b'));
+        self::assertSame('token-a', $ops->get('lock'));
+    }
+
+    public function test_setnx_succeeds_again_after_del(): void
+    {
+        $ops = new InMemoryKvOps();
+        self::assertTrue($ops->setnx('lock', 'token-a'));
+        $ops->del('lock');
+        self::assertTrue($ops->setnx('lock', 'token-b'));
+        self::assertSame('token-b', $ops->get('lock'));
+    }
+
+    public function test_setnx_applies_ttl(): void
+    {
+        $ops = new InMemoryKvOps();
+        self::assertTrue($ops->setnx('lock', 'token', 30));
+        $pttl = $ops->pttl('lock');
+        self::assertGreaterThan(0, $pttl);
+        self::assertLessThanOrEqual(30_000, $pttl);
+    }
+
     public function test_set_with_ttl_then_pttl_within_window(): void
     {
         $ops = new InMemoryKvOps();

@@ -37,6 +37,22 @@ final class InMemoryKvOps implements KvOpsInterface
         return true;
     }
 
+    public function setnx(string $key, string $value, int $ttlSeconds = 0): bool
+    {
+        // Insert-or-fail: a live entry blocks the insert, matching the SAPI's
+        // per-shard-locked setnx (the store's lock primitive).
+        if ($this->liveValue($key) !== null) {
+            return false;
+        }
+        $this->values[$key] = $value;
+        if ($ttlSeconds > 0) {
+            $this->deadlines[$key] = $this->nowMs() + ($ttlSeconds * 1000);
+        } else {
+            unset($this->deadlines[$key]);
+        }
+        return true;
+    }
+
     public function del(string $key): int
     {
         if ($this->liveValue($key) === null) {

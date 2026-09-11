@@ -67,7 +67,7 @@ KV store instead of a `flock()` + `fwrite()` against
   almost certainly already have it).
 - **The ePHPm runtime** — any tagged release works (the `ephpm_kv_*`
   SAPI functions this handler calls have shipped since ePHPm v0.1.0;
-  current release: v0.8.6). The functions are
+  current release: v0.10.2). The functions are
   registered by ePHPm's embedded PHP. Outside ePHPm,
   `SapiKvOps::__construct()` throws fast so you know immediately that
   you're not running where the handler can work. For development
@@ -239,13 +239,17 @@ codebases with hundreds of `.php` files at the docroot.
 
 ## Configuration
 
-The constructor takes three optional arguments:
+The constructor's arguments are all optional:
 
 ```php
 new KvSessionHandler(
     string $prefix = 'php_session:',     // key prefix in the KV store
     ?int $ttlSeconds = null,             // null = read session.gc_maxlifetime
     ?KvOpsInterface $ops = null,         // backend override (tests)
+    bool $lockSessions = false,          // opt-in per-session-id locking (see below)
+    int $lockTtlSeconds = 30,            // lock lifetime (frees a crashed owner)
+    int $lockSpinIntervalUs = 20_000,    // sleep between spin retries (µs)
+    int $lockMaxWaitMs = 5_000,          // max spin before proceeding lock-free
 );
 ```
 
@@ -276,6 +280,39 @@ session_set_save_handler(new KvSessionHandler(ttlSeconds: 7200), true);  // 2h
 
 The TTL is reset on every write, so an actively-used session never
 times out mid-conversation.
+
+### Opt-in per-session locking
+
+By default this handler is lock-free (see [Limitations](#limitations)).
+If you need Files-handler-style single-flighting — two concurrent
+requests sharing one session cookie serialised so their `$_SESSION`
+writes don't clobber each other — enable it explicitly:
+
+```php
+session_set_save_handler(new KvSessionHandler(lockSessions: true), true);
+```
+
+When enabled, `read()` acquires a per-session lock at
+`<prefix>lock:<id>` via the KV store's atomic `ephpm_kv_setnx` (the
+lock primitive), spinning up to `lockMaxWaitMs` for a contended lock,
+and `close()` releases it. Tune the lock with `lockTtlSeconds` (the
+safety valve that frees a session whose owner crashed before `close()`),
+`lockSpinIntervalUs`, and `lockMaxWaitMs`.
+
+Two caveats worth knowing:
+
+- **Best-effort unlock.** The SAPI has no compare-and-delete, so the
+  release deletes the lock key without verifying the owner token. The
+  lock TTL, not the unlock, is the real backstop against a stuck lock —
+  the same trade the Files handler's advisory `flock()` makes.
+- **Requires a runtime providing `ephpm_kv_setnx`.** Enabling locking on
+  an older runtime that lacks it surfaces a `Call to undefined function`
+  the first time a session is read. The default (disabled) path never
+  touches `setnx`.
+
+Most apps are better off calling `session_write_close()` early to *avoid*
+serialization (it lets concurrent AJAX proceed); reach for locking only
+when you genuinely need the mutual exclusion.
 
 ---
 
@@ -316,15 +353,16 @@ nothing here cares.
 
 ## Limitations
 
-- **No cross-process locking on a single session id.** PHP's Files
-  handler uses `flock()` so two concurrent requests with the same
+- **No cross-process locking on a single session id by default.** PHP's
+  Files handler uses `flock()` so two concurrent requests with the same
   session cookie serialize at the storage layer. This handler doesn't —
-  with ePHPm's threading model all PHP execution is in one process,
-  and you can opt in to single-flighting per session id at the
-  application level if you need it (modern apps usually call
-  `session_write_close()` early to *avoid* serialization, since it
-  kills concurrent AJAX). Most apps don't actually want session locking
-  — but if yours does, this is a behavior change worth knowing about.
+  unless you opt in with `lockSessions: true` (see
+  [Opt-in per-session locking](#opt-in-per-session-locking)), which
+  single-flights per session id via the KV store's atomic `setnx`.
+  Modern apps usually call `session_write_close()` early to *avoid*
+  serialization, since it kills concurrent AJAX, so locking stays off by
+  default. Most apps don't actually want session locking — but if yours
+  does, the opt-in gives you Files-handler parity.
 - **Restart loses session state.** ePHPm's KV is in-process; an
   `ephpm restart` clears it. If you need session persistence across
   restarts, either run a clustered ePHPm setup (gossip-replicated KV
@@ -382,10 +420,11 @@ gossip-replicated KV survives single-node loss.
 
 ### Two browser tabs interleave session writes
 
-There's no per-session-id locking. PHP's Files handler used to provide
-this; this handler does not. Either call `session_write_close()` as
-soon as you've extracted what you need (the modern preferred pattern,
-allows concurrent AJAX), or keep your conflicting writes idempotent.
+There's no per-session-id locking unless you opt in with
+`lockSessions: true` (see [Opt-in per-session locking](#opt-in-per-session-locking)).
+Either enable that, call `session_write_close()` as soon as you've
+extracted what you need (the modern preferred pattern, allows concurrent
+AJAX), or keep your conflicting writes idempotent.
 
 ### Counter `$_SESSION['hits']` doesn't increment past 1
 
@@ -401,10 +440,11 @@ verify the same id comes back across refreshes.
 ePHPm runs PHP inside the same OS process as the KV store via the
 embed SAPI. The store is a Rust [`DashMap`](https://docs.rs/dashmap/)
 plus TTL management. ePHPm registers a small set of host functions
-(`ephpm_kv_get`, `ephpm_kv_set`, `ephpm_kv_del`, `ephpm_kv_exists`,
-`ephpm_kv_expire`, `ephpm_kv_ttl`, `ephpm_kv_pttl`, `ephpm_kv_incr_by`)
-into PHP's global function table. Calling one is a direct C call into
-Rust — no socket, no protocol parser.
+(`ephpm_kv_get`, `ephpm_kv_set`, `ephpm_kv_setnx`, `ephpm_kv_del`,
+`ephpm_kv_exists`, `ephpm_kv_expire`, `ephpm_kv_ttl`, `ephpm_kv_pttl`,
+`ephpm_kv_incr_by`) into PHP's global function table. Calling one is a
+direct C call into Rust — no socket, no protocol parser. (`setnx` backs
+the opt-in per-session lock; the rest cover the core session lifecycle.)
 
 This package wraps those functions in a
 `SessionHandlerInterface` + `SessionUpdateTimestampHandlerInterface`
