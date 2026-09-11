@@ -35,6 +35,20 @@ interface KvOpsInterface
     public function set(string $key, string $value, int $ttlSeconds = 0): bool;
 
     /**
+     * Atomically set a key to a value **only if it does not already exist**.
+     *
+     * This is the KV store's lock primitive: the insert-or-fail happens under
+     * the per-shard lock, so exactly one concurrent caller can win the key.
+     *
+     * @param int $ttlSeconds 0 means no expiry; positive values are seconds
+     *
+     * @return bool true when this call inserted the key; false when a live
+     *              entry already exists (or on OOM). A false return is the
+     *              signal that another holder owns the key right now.
+     */
+    public function setnx(string $key, string $value, int $ttlSeconds = 0): bool;
+
+    /**
      * Delete a key.
      *
      * @return int 1 if the key existed, 0 if it did not
