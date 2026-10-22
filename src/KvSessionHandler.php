@@ -56,6 +56,7 @@ final class KvSessionHandler implements
      */
     private bool $lockHeld = false;
     private ?string $lockKey = null;
+    private ?string $lockToken = null;
 
     /**
      * @param string             $prefix             Key prefix written before each session
@@ -87,10 +88,13 @@ final class KvSessionHandler implements
      * request's lifetime. This handler does not do that by default. When
      * `$lockSessions` is true, `read()` acquires a per-session lock at
      * `<prefix>lock:<id>` with a bounded {@see \ephpm_kv_setnx} spin and
-     * `close()` releases it. Because the SAPI has no compare-and-delete, the
-     * release is *best-effort* (`del` without owner-token verification) —
-     * Files-handler parity, pending a future CAS primitive. The lock TTL caps
-     * the blast radius of a crashed owner.
+     * `close()` releases it. The release is owner-verified when the backend
+     * supports compare-and-delete ({@see CompareAndDeleteKvOpsInterface};
+     * `ephpm_kv_del_if_eq()`, ePHPm v0.11.x+): only a lock still holding this
+     * request's token is deleted, so a request that overran the lock TTL
+     * cannot free the lock a later request has since taken. On older runtimes
+     * the release falls back to a best-effort `del` without token
+     * verification. The lock TTL caps the blast radius of a crashed owner.
      */
     public function __construct(
         string $prefix = 'php_session:',
@@ -124,9 +128,9 @@ final class KvSessionHandler implements
     }
 
     /**
-     * Releases the per-session lock if this handler holds one. Best-effort:
-     * with no compare-and-delete primitive we cannot verify the owner token
-     * before deleting, so the TTL is the real safety net (see the constructor).
+     * Releases the per-session lock if this handler holds one — owner-verified
+     * via compare-and-delete where the runtime supports it, best-effort `del`
+     * otherwise (see the constructor).
      */
     public function close(): bool
     {
@@ -272,6 +276,7 @@ final class KvSessionHandler implements
             if ($this->ops->setnx($key, $token, $this->lockTtlSeconds)) {
                 $this->lockHeld = true;
                 $this->lockKey = $key;
+                $this->lockToken = $token;
                 return true;
             }
             if ($this->nowMs() >= $deadlineMs) {
@@ -282,18 +287,31 @@ final class KvSessionHandler implements
     }
 
     /**
-     * Best-effort release of a lock this handler acquired. No-op if we never
-     * took one (e.g. locking disabled, or the acquire timed out).
+     * Release a lock this handler acquired. No-op if we never took one (e.g.
+     * locking disabled, or the acquire timed out).
+     *
+     * With compare-and-delete available the lock is deleted only while it
+     * still holds our token; if our TTL already lapsed and another request
+     * took the lock, it is left alone. Without it (a custom backend, or an
+     * ePHPm runtime older than v0.11.x) we cannot prove ownership, so the
+     * release is a best-effort `del` — the lock TTL bounds the damage.
      */
     private function releaseLock(): void
     {
         if ($this->lockHeld && $this->lockKey !== null) {
-            // No CAS: we cannot prove we still own the token before deleting.
-            // The lock TTL bounds the damage; this matches Files-handler parity.
-            $this->ops->del($this->lockKey);
+            if (
+                $this->lockToken !== null
+                && $this->ops instanceof CompareAndDeleteKvOpsInterface
+                && $this->ops->supportsDelIfEq()
+            ) {
+                $this->ops->delIfEq($this->lockKey, $this->lockToken);
+            } else {
+                $this->ops->del($this->lockKey);
+            }
         }
         $this->lockHeld = false;
         $this->lockKey = null;
+        $this->lockToken = null;
     }
 
     private function nowMs(): int

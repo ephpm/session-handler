@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Ephpm\SessionHandler\Tests;
 
 use Ephpm\SessionHandler\InMemoryKvOps;
+use Ephpm\SessionHandler\KvOpsInterface;
 use Ephpm\SessionHandler\KvSessionHandler;
+use Ephpm\SessionHandler\Tests\Support\NoCompareAndDeleteKvOps;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\PreserveGlobalState;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
@@ -224,7 +226,7 @@ final class KvSessionHandlerTest extends TestCase
     // ── opt-in session locking ───────────────────────────────────────────────
 
     private function lockingHandler(
-        InMemoryKvOps $ops,
+        KvOpsInterface $ops,
         int $maxWaitMs = 5_000,
         int $spinUs = 20_000,
         int $lockTtl = 30,
@@ -321,5 +323,51 @@ final class KvSessionHandlerTest extends TestCase
         $tokenB = $ops->get('php_session:lock:sid');
         self::assertNotNull($tokenB);
         self::assertNotSame($tokenA, $tokenB);
+    }
+
+    public function test_release_leaves_a_lock_another_request_has_since_taken(): void
+    {
+        $ops = new InMemoryKvOps();
+
+        // A takes the lock, then (simulated) overruns its TTL: the lock lapses
+        // and B takes it, so the key now holds B's token.
+        $a = $this->lockingHandler($ops);
+        $a->read('sid');
+        $ops->set('php_session:lock:sid', 'token-of-B', 30);
+
+        // A's release is compare-and-delete: B's lock must survive it.
+        $a->close();
+        self::assertSame('token-of-B', $ops->get('php_session:lock:sid'));
+    }
+
+    public function test_release_without_compare_and_delete_falls_back_to_plain_del(): void
+    {
+        // A backend without CompareAndDeleteKvOpsInterface (a custom
+        // KvOpsInterface, or SapiKvOps on ePHPm older than v0.11.x) keeps the
+        // previous best-effort release: the lock key is deleted unverified.
+        $ops = new NoCompareAndDeleteKvOps(new InMemoryKvOps());
+
+        $a = $this->lockingHandler($ops);
+        $a->read('sid');
+        self::assertTrue($ops->exists('php_session:lock:sid'));
+        $ops->set('php_session:lock:sid', 'token-of-B', 30);
+
+        $a->close();
+        self::assertFalse($ops->exists('php_session:lock:sid'));
+    }
+
+    public function test_release_with_compare_and_delete_frees_our_own_lock(): void
+    {
+        $ops = new InMemoryKvOps();
+        $a = $this->lockingHandler($ops);
+        $a->read('sid');
+
+        $a->close();
+        self::assertFalse($ops->exists('php_session:lock:sid'));
+
+        // A second close() is a no-op (nothing held any more).
+        $ops->set('php_session:lock:sid', 'someone-else', 30);
+        $a->close();
+        self::assertSame('someone-else', $ops->get('php_session:lock:sid'));
     }
 }

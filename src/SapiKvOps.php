@@ -10,7 +10,7 @@ namespace Ephpm\SessionHandler;
  * so we fail fast outside the runtime instead of producing
  * "Call to undefined function" errors at request time.
  */
-final class SapiKvOps implements KvOpsInterface
+final class SapiKvOps implements KvOpsInterface, CompareAndDeleteKvOpsInterface
 {
     public function __construct()
     {
@@ -42,6 +42,20 @@ final class SapiKvOps implements KvOpsInterface
     public function del(string $key): int
     {
         return (int) \ephpm_kv_del($key);
+    }
+
+    /**
+     * `ephpm_kv_del_if_eq()` ships in ePHPm v0.11.x and later; older runtimes
+     * lack it, so it is feature-detected rather than assumed.
+     */
+    public function supportsDelIfEq(): bool
+    {
+        return \function_exists('ephpm_kv_del_if_eq');
+    }
+
+    public function delIfEq(string $key, string $expected): bool
+    {
+        return (bool) \ephpm_kv_del_if_eq($key, $expected);
     }
 
     public function exists(string $key): bool

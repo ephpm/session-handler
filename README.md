@@ -301,10 +301,17 @@ safety valve that frees a session whose owner crashed before `close()`),
 
 Two caveats worth knowing:
 
-- **Best-effort unlock.** The SAPI has no compare-and-delete, so the
-  release deletes the lock key without verifying the owner token. The
-  lock TTL, not the unlock, is the real backstop against a stuck lock —
-  the same trade the Files handler's advisory `flock()` makes.
+- **Owner-verified unlock on ePHPm v0.11.x+.** The release uses the
+  atomic compare-and-delete `ephpm_kv_del_if_eq()`: the lock is deleted
+  only while it still holds this request's token, so a request that
+  overran `lockTtlSeconds` cannot free the lock a later request has since
+  taken. The function is feature-detected; on older runtimes (or a custom
+  `KvOpsInterface` backend that does not also implement
+  `CompareAndDeleteKvOpsInterface`) the release falls back to a
+  best-effort delete without token verification. Either way the lock TTL
+  is the backstop against a stuck lock. Size `lockTtlSeconds` above your
+  slowest request: once it lapses, another request can take the lock while
+  the first is still running.
 - **Requires a runtime providing `ephpm_kv_setnx`.** Enabling locking on
   an older runtime that lacks it surfaces a `Call to undefined function`
   the first time a session is read. The default (disabled) path never
@@ -441,10 +448,11 @@ ePHPm runs PHP inside the same OS process as the KV store via the
 embed SAPI. The store is a Rust [`DashMap`](https://docs.rs/dashmap/)
 plus TTL management. ePHPm registers a small set of host functions
 (`ephpm_kv_get`, `ephpm_kv_set`, `ephpm_kv_setnx`, `ephpm_kv_del`,
-`ephpm_kv_exists`, `ephpm_kv_expire`, `ephpm_kv_ttl`, `ephpm_kv_pttl`,
-`ephpm_kv_incr_by`) into PHP's global function table. Calling one is a
-direct C call into Rust — no socket, no protocol parser. (`setnx` backs
-the opt-in per-session lock; the rest cover the core session lifecycle.)
+`ephpm_kv_del_if_eq`, `ephpm_kv_exists`, `ephpm_kv_expire`,
+`ephpm_kv_ttl`, `ephpm_kv_pttl`, `ephpm_kv_incr_by`) into PHP's global
+function table. Calling one is a direct C call into Rust — no socket, no
+protocol parser. (`setnx` and `del_if_eq` back the opt-in per-session
+lock; the rest cover the core session lifecycle.)
 
 This package wraps those functions in a
 `SessionHandlerInterface` + `SessionUpdateTimestampHandlerInterface`
