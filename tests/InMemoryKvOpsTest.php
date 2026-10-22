@@ -159,4 +159,21 @@ final class InMemoryKvOpsTest extends TestCase
         self::assertNull($ops->get('b'));
         self::assertSame(-2, $ops->pttl('b'));
     }
+
+    public function test_del_if_eq_deletes_only_on_matching_value(): void
+    {
+        $ops = new InMemoryKvOps();
+        self::assertTrue($ops->supportsDelIfEq());
+
+        $ops->set('k', 'mine', 60);
+        self::assertFalse($ops->delIfEq('k', 'theirs'));
+        self::assertSame('mine', $ops->get('k'));
+
+        self::assertTrue($ops->delIfEq('k', 'mine'));
+        self::assertNull($ops->get('k'));
+        self::assertSame(-2, $ops->pttl('k'));
+
+        // Missing key: nothing to delete.
+        self::assertFalse($ops->delIfEq('k', 'mine'));
+    }
 }

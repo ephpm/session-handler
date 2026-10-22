@@ -13,7 +13,7 @@ namespace Ephpm\SessionHandler;
  * in milliseconds; lazy expiry (a key is only "gone" when it's looked up
  * after its deadline). No background sweeper.
  */
-final class InMemoryKvOps implements KvOpsInterface
+final class InMemoryKvOps implements KvOpsInterface, CompareAndDeleteKvOpsInterface
 {
     /** @var array<string, string> */
     private array $values = [];
@@ -60,6 +60,20 @@ final class InMemoryKvOps implements KvOpsInterface
         }
         unset($this->values[$key], $this->deadlines[$key]);
         return 1;
+    }
+
+    public function supportsDelIfEq(): bool
+    {
+        return true;
+    }
+
+    public function delIfEq(string $key, string $expected): bool
+    {
+        if ($this->liveValue($key) !== $expected) {
+            return false;
+        }
+        unset($this->values[$key], $this->deadlines[$key]);
+        return true;
     }
 
     public function exists(string $key): bool
