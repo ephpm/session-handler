@@ -67,7 +67,7 @@ KV store instead of a `flock()` + `fwrite()` against
   almost certainly already have it).
 - **The ePHPm runtime** — any tagged release works (the `ephpm_kv_*`
   SAPI functions this handler calls have shipped since ePHPm v0.1.0;
-  current release: v0.10.2). The functions are
+  see the [ePHPm releases](https://github.com/ephpm/ephpm/releases) for the latest version). The functions are
   registered by ePHPm's embedded PHP. Outside ePHPm,
   `SapiKvOps::__construct()` throws fast so you know immediately that
   you're not running where the handler can work. For development
