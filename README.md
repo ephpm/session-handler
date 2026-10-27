@@ -85,12 +85,12 @@ var_dump(function_exists('ephpm_kv_get'));   // expect bool(true)
 
 ePHPm packages are distributed via their GitHub repositories, not
 Packagist. Add this repo as a Composer `vcs` repository, then require
-the package (`ephpm/session-handler` is tagged `v0.1.0`, so `^0.1`
+the package (`ephpm/session-handler` is tagged `v0.2.0`, so `^0.2`
 resolves):
 
 ```bash
 composer config repositories.ephpm/session-handler vcs https://github.com/ephpm/session-handler
-composer require ephpm/session-handler:^0.1
+composer require ephpm/session-handler:^0.2
 ```
 
 That's it. No framework deps, nothing else to pull in.
@@ -121,7 +121,7 @@ my-app/
     ],
     "require": {
         "php": "^8.2",
-        "ephpm/session-handler": "^0.1"
+        "ephpm/session-handler": "^0.2"
     }
 }
 ```
@@ -202,7 +202,7 @@ If your WordPress install doesn't already have a Composer-managed
 cd /path/to/wordpress
 composer init --no-interaction --name=site/wp
 composer config repositories.ephpm/session-handler vcs https://github.com/ephpm/session-handler
-composer require ephpm/session-handler:^0.1
+composer require ephpm/session-handler:^0.2
 ```
 
 Then point the autoload include in the mu-plugin at that vendor path.
